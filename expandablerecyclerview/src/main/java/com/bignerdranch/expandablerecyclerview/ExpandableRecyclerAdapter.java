@@ -164,6 +164,26 @@ public abstract class ExpandableRecyclerAdapter<P extends Parent<C>, C, PVH exte
     @SuppressWarnings("unchecked")
     @UiThread
     public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int flatPosition) {
+        // Not Implemented in favour of
+        // onBindViewHolder(RecyclerView.ViewHolder holder, int position,List<Object> payloads)
+    }
+
+    /**
+     * Implementation of Adapter.onBindViewHolder(RecyclerView.ViewHolder, int, List)
+     * that determines if the list item is a parent or a child and calls through
+     * to the appropriate implementation of either
+     * {@link #onBindParentViewHolder(ParentViewHolder, int, P, List)} or
+     * {@link #onBindChildViewHolder(ChildViewHolder, int, int, C, List)}.
+     *
+     * @param holder The RecyclerView.ViewHolder to bind data to
+     * @param flatPosition The index in the merged list of children and parents at which to bind
+     * @param payloads A non-null list of merged payloads. Can be empty list if requires full
+     *                 update.
+     */
+    @Override
+    @SuppressWarnings("unchecked")
+    @UiThread
+    public void onBindViewHolder(RecyclerView.ViewHolder holder, int flatPosition, List<Object> payloads) {
         if (flatPosition > mFlatItemList.size()) {
             throw new IllegalStateException("Trying to bind item out of bounds, size " + mFlatItemList.size()
                     + " flatPosition " + flatPosition + ". Was the data changed without a call to notify...()?");
@@ -179,11 +199,11 @@ public abstract class ExpandableRecyclerAdapter<P extends Parent<C>, C, PVH exte
 
             parentViewHolder.setExpanded(listItem.isExpanded());
             parentViewHolder.mParent = listItem.getParent();
-            onBindParentViewHolder(parentViewHolder, getNearestParentPosition(flatPosition), listItem.getParent());
+            onBindParentViewHolder(parentViewHolder, getNearestParentPosition(flatPosition), listItem.getParent(), payloads);
         } else {
             CVH childViewHolder = (CVH) holder;
             childViewHolder.mChild = listItem.getChild();
-            onBindChildViewHolder(childViewHolder, getNearestParentPosition(flatPosition), getChildPosition(flatPosition), listItem.getChild());
+            onBindChildViewHolder(childViewHolder, getNearestParentPosition(flatPosition), getChildPosition(flatPosition), listItem.getChild(), payloads);
         }
     }
 
@@ -225,6 +245,23 @@ public abstract class ExpandableRecyclerAdapter<P extends Parent<C>, C, PVH exte
     public abstract void onBindParentViewHolder(@NonNull PVH parentViewHolder, int parentPosition, @NonNull P parent);
 
     /**
+     * Callback called from onBindViewHolder(RecyclerView.ViewHolder, int, List)
+     * when the list item bound to is a parent.
+     * <p>
+     * Bind data to the {@link PVH} here.
+     *
+     * @param parentViewHolder The {@code PVH} to bind data to
+     * @param parentPosition The position of the parent to bind
+     * @param parent The parent which holds the data to be bound to the {@code PVH}
+     * @param payloads A non-null list of merged payloads. Can be empty list if requires full Parent
+     *                 update.
+     */
+    @UiThread
+    public void onBindParentViewHolder(@NonNull PVH parentViewHolder, int parentPosition, @NonNull P parent, @NonNull List<Object> payloads){
+        onBindParentViewHolder(parentViewHolder, parentPosition, parent);
+    }
+
+    /**
      * Callback called from onBindViewHolder(RecyclerView.ViewHolder, int)
      * when the list item bound to is a child.
      * <p>
@@ -237,6 +274,24 @@ public abstract class ExpandableRecyclerAdapter<P extends Parent<C>, C, PVH exte
      */
     @UiThread
     public abstract void onBindChildViewHolder(@NonNull CVH childViewHolder, int parentPosition, int childPosition, @NonNull C child);
+
+    /**
+     * Callback called from onBindViewHolder(RecyclerView.ViewHolder, int, List)
+     * when the list item bound to is a child.
+     * <p>
+     * Bind data to the {@link CVH} here.
+     *
+     * @param childViewHolder The {@code CVH} to bind data to
+     * @param parentPosition The position of the parent that contains the child to bind
+     * @param childPosition The position of the child to bind
+     * @param child The child which holds that data to be bound to the {@code CVH}
+     * @param payloads A non-null list of merged payloads. Can be empty list if requires full Child
+     *                 update.
+     */
+    @UiThread
+    public void onBindChildViewHolder(@NonNull CVH childViewHolder, int parentPosition, int childPosition, @NonNull C child, @NonNull List<Object> payloads) {
+        onBindChildViewHolder(childViewHolder, parentPosition, childPosition, child);
+    }
 
     /**
      * Gets the number of parents and children currently expanded.
@@ -988,11 +1043,40 @@ public abstract class ExpandableRecyclerAdapter<P extends Parent<C>, C, PVH exte
      */
     @UiThread
     public void notifyParentChanged(int parentPosition) {
+        notifyParentChanged(parentPosition, null);
+    }
+
+    /**
+     * Notify any registered observers that the parent at {@code parentPosition} has changed.
+     * This will also trigger an item changed for children of the parent list specified.
+     * <p>
+     * This is an item change event, not a structural change event. It indicates that any
+     * reflection of the data at {@code parentPosition} is out of date and should be updated.
+     * The parent at {@code parentPosition} retains the same identity. This means
+     * the number of children must stay the same.
+     * <p>
+     * Client can optionally pass a payload for partial change. These payloads will be merged
+     * and may be passed to adapter's
+     * {@link #onBindParentViewHolder(ParentViewHolder, int, P, List)} and
+     * {@link #onBindChildViewHolder(ChildViewHolder, int, int, C, List)} if the
+     * item is already represented by a ViewHolder and it will be rebound to the same
+     * ViewHolder. A notifyParentChanged() with null payload will clear all existing
+     * payloads on that item and prevent future payload until
+     * {@link #onBindParentViewHolder(ParentViewHolder, int, P, List)} and
+     * {@link #onBindChildViewHolder(ChildViewHolder, int, int, C, List)} is called.
+     * Adapter should not assume that the payload will always be passed to onBindParentViewHolder(),
+     * , onBindChildViewHolder(), e.g. when the view is not attached, the payload will be simply dropped.
+     *
+     * @param parentPosition Position of the item that has changed
+     * @param payload Optional parameter, use null to identify a "full" update
+     */
+    @UiThread
+    public void notifyParentChanged(int parentPosition, Object payload) {
         P parent = mParentList.get(parentPosition);
         int flatParentPositionStart = getFlatParentPosition(parentPosition);
         int sizeChanged = changeParentWrapper(flatParentPositionStart, parent);
 
-        notifyItemRangeChanged(flatParentPositionStart, sizeChanged);
+        notifyItemRangeChanged(flatParentPositionStart, sizeChanged, payload);
     }
 
     /**
@@ -1010,6 +1094,38 @@ public abstract class ExpandableRecyclerAdapter<P extends Parent<C>, C, PVH exte
      */
     @UiThread
     public void notifyParentRangeChanged(int parentPositionStart, int itemCount) {
+        notifyParentRangeChanged(parentPositionStart, itemCount, null);
+    }
+
+
+    /**
+     * Notify any registered observers that the {@code itemCount} ParentListItems starting
+     * at {@code parentPositionStart} have changed. This will also trigger an item changed
+     * for children of the ParentList specified.
+     * <p>
+     * This is an item change event, not a structural change event. It indicates that any
+     * reflection of the data in the given position range is out of date and should be updated.
+     * The parents in the given range retain the same identity. This means that the number of
+     * children must stay the same.
+     * <p>
+     * Client can optionally pass a payload for partial change. These payloads will be merged
+     * and may be passed to adapter's
+     * {@link #onBindParentViewHolder(ParentViewHolder, int, P, List)} and
+     * {@link #onBindChildViewHolder(ChildViewHolder, int, int, C, List)} if the
+     * item is already represented by a ViewHolder and it will be rebound to the same
+     * ViewHolder. A notifyParentItemRangeChanged() with null payload will clear all existing
+     * payloads on that item and prevent future payload until
+     * {@link #onBindParentViewHolder(ParentViewHolder, int, P, List)} and
+     * {@link #onBindChildViewHolder(ChildViewHolder, int, int, C, List)} is called.
+     * Adapter should not assume that the payload will always be passed to onBindParentViewHolder(),
+     * , onBindChildViewHolder(), e.g. when the view is not attached, the payload will be simply dropped.
+     *
+     * @param parentPositionStart Position of the item that has changed
+     * @param itemCount Number of parents changed in the data set
+     * @param payload Optional parameter, use null to identify a "full" update
+     */
+    @UiThread
+    public void notifyParentRangeChanged(int parentPositionStart, int itemCount, Object payload) {
         int flatParentPositionStart = getFlatParentPosition(parentPositionStart);
 
         int flatParentPosition = flatParentPositionStart;
@@ -1023,7 +1139,7 @@ public abstract class ExpandableRecyclerAdapter<P extends Parent<C>, C, PVH exte
             flatParentPosition += changed;
             parentPositionStart++;
         }
-        notifyItemRangeChanged(flatParentPositionStart, sizeChanged);
+        notifyItemRangeChanged(flatParentPositionStart, sizeChanged, payload);
     }
 
     private int changeParentWrapper(int flatParentPosition, P parent) {
@@ -1240,6 +1356,33 @@ public abstract class ExpandableRecyclerAdapter<P extends Parent<C>, C, PVH exte
      */
     @UiThread
     public void notifyChildChanged(int parentPosition, int childPosition) {
+        notifyChildChanged(parentPosition, childPosition, null);
+    }
+
+    /**
+     * Notify any registered observers that the ParentListItem at {@code parentPosition} has
+     * a child located at {@code childPosition} that has changed.
+     * <p>
+     * This is an item change event, not a structural change event. It indicates that any
+     * reflection of the data at {@code childPosition} is out of date and should be updated.
+     * The ParentListItem at {@code childPosition} retains the same identity.
+     * <p>
+     * Client can optionally pass a payload for partial change. These payloads will be merged
+     * and may be passed to adapter's
+     * {@link #onBindChildViewHolder(ChildViewHolder, int, int, C, List)} if the
+     * item is already represented by a ViewHolder and it will be rebound to the same
+     * ViewHolder. A notifyChildChanged() with null payload will clear all existing
+     * payloads on that item and prevent future payload until
+     * {@link #onBindChildViewHolder(ChildViewHolder, int, int, C, List)} is called.
+     * Adapter should not assume that the payload will always be passed to onBindChildViewHolder(),
+     * e.g. when the view is not attached, the payload will be simply dropped.
+     *
+     * @param parentPosition Position of the parent which has a child that has changed
+     * @param childPosition Position of the child that has changed
+     * @param payload Optional parameter, use null to identify a "full" update
+     */
+    @UiThread
+    public void notifyChildChanged(int parentPosition, int childPosition, Object payload) {
         P parent = mParentList.get(parentPosition);
         int flatParentPosition = getFlatParentPosition(parentPosition);
         ExpandableWrapper<P, C> parentWrapper = mFlatItemList.get(flatParentPosition);
@@ -1248,7 +1391,7 @@ public abstract class ExpandableRecyclerAdapter<P extends Parent<C>, C, PVH exte
             int flatChildPosition = flatParentPosition + childPosition + 1;
             ExpandableWrapper<P, C> child = parentWrapper.getWrappedChildList().get(childPosition);
             mFlatItemList.set(flatChildPosition, child);
-            notifyItemChanged(flatChildPosition);
+            notifyItemChanged(flatChildPosition, payload);
         }
     }
 
@@ -1267,6 +1410,35 @@ public abstract class ExpandableRecyclerAdapter<P extends Parent<C>, C, PVH exte
      */
     @UiThread
     public void notifyChildRangeChanged(int parentPosition, int childPositionStart, int itemCount) {
+        notifyChildRangeChanged(parentPosition, childPositionStart, itemCount, null);
+    }
+
+    /**
+     * Notify any registered observers that the ParentListItem at {@code parentPosition} has
+     * {@code itemCount} child Objects starting at {@code childPositionStart} that have changed.
+     * <p>
+     * This is an item change event, not a structural change event. It indicates that any
+     * The parent at {@code childPositionStart} retains the same identity.
+     * reflection of the set of {@code itemCount} children starting at {@code childPositionStart}
+     * are out of date and should be updated.
+     * <p>
+     * Client can optionally pass a payload for partial change. These payloads will be merged
+     * and may be passed to adapter's
+     * {@link #onBindChildViewHolder(ChildViewHolder, int, int, C, List)} if the
+     * item is already represented by a ViewHolder and it will be rebound to the same
+     * ViewHolder. A notifyChildItemRangeChanged() with null payload will clear all existing
+     * payloads on that item and prevent future payload until
+     * {@link #onBindChildViewHolder(ChildViewHolder, int, int, C, List)} is called.
+     * Adapter should not assume that the payload will always be passed to onBindParentViewHolder(),
+     * e.g. when the view is not attached, the payload will be simply dropped.
+     *
+     * @param parentPosition Position of the parent who has a child that has changed
+     * @param childPositionStart Position of the first child that has changed
+     * @param itemCount number of children changed
+     * @param payload Optional parameter, use null to identify a "full" update
+     */
+    @UiThread
+    public void notifyChildRangeChanged(int parentPosition, int childPositionStart, int itemCount, Object payload) {
         P parent = mParentList.get(parentPosition);
         int flatParentPosition = getFlatParentPosition(parentPosition);
         ExpandableWrapper<P, C> parentWrapper = mFlatItemList.get(flatParentPosition);
@@ -1278,7 +1450,7 @@ public abstract class ExpandableRecyclerAdapter<P extends Parent<C>, C, PVH exte
                         = parentWrapper.getWrappedChildList().get(childPositionStart + i);
                 mFlatItemList.set(flatChildPosition + i, child);
             }
-            notifyItemRangeChanged(flatChildPosition, itemCount);
+            notifyItemRangeChanged(flatChildPosition, itemCount, payload);
         }
     }
 
